@@ -1,73 +1,22 @@
 /**
  * file: cbman.c
- * I have split the managment of the cb into this file so they can be unit tested
+ * I have split the managment of the cbs into this file so they can be unit tested
  * in user space since they get a little tricky to manage and debug in the kernel.
- *
- * ATM this is a big mess with the utest included. I will tidy this up into just a 
- * lib for use by the tests and driver.
  */
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
-// dump this in here so we can play in user land first
-struct bcm2708_dma_cb {
-	unsigned long info;
-	unsigned long src;
-	unsigned long dst;
-	unsigned long length;
-	unsigned long stride;
-	unsigned long next;
-	unsigned long pad[2];
-}__attribute__((packed));
+#ifdef TEST
+#include "cbman_test.h"
+#endif
 
-#define BCM2708_PERI_BASE        0x20000000
-#define GPIO_BASE                (BCM2708_PERI_BASE + 0x200000) /* GPIO */
-#define BCM2708_DMA_WAIT_RESP	(1 << 3)
-#define BCM2708_DMA_D_DREQ	(1 << 6)
-#define	BCM2708_DMA_PER_MAP(x)	((x) << 16)
-#define PWM_BASE		(BCM2708_PERI_BASE + 0x20C000)
-#define GPSET0			(0x1c/4)
-#define GPCLR0			(0x28/4)
-#define PWM_FIFO		(0x18/4)
-#define BCM2708_DMA_NO_WIDE_BURSTS	(1<<26)
+extern uint8_t servo2gpio[];
+extern struct ctldata_s *ctl;
+extern int tick_scale;
 
-// Map servo channels to GPIO pins
-static uint8_t servo2gpio[] = {
-		4,	// P1-7
-		17,	// P1-11
-		1,	// P1-5 (GPIO-18, P1-12 is currently PWM0, for debug)
-		21,	// P1-13
-		22,	// P1-15
-		23,	// P1-16
-		24,	// P1-18
-		25,	// P1-22
-};
-
-#define NUM_SERVOS	(sizeof(servo2gpio)/sizeof(servo2gpio[0]))
-
-struct ctldata_s {
-	struct bcm2708_dma_cb cbbufs[2][3 + 2*NUM_SERVOS];	// (gpio-lo, gpio-hi, delay, (gpio-lo, delay) x NUM_SERVOS), x 2 for double buffer
-	struct bcm2708_dma_cb *cba, *cbw;					// point to active cbbuf and working cbbuf
-	uint32_t gpioinit[2][2];							// initial clear and set values, x 2 for double buffer
-	uint32_t gpiolo[2][NUM_SERVOS];						// clear-pin values, per servo output, x 2 for double buffer
-	uint32_t pwmdata;									// the word we write to the pwm fifo
-	uint32_t period;									// total cycle time (in ticks ie 10us counts), this is const for all servos
-};
-
-// Instances
-static struct ctldata_s _ctl;
-static struct ctldata_s *ctl = &_ctl;
-static int tick_scale = 6;
-
-// enter period in us (= T0 / (tick_scale / 600khz))
-#define PERIOD(x) (x / (tick_scale * 1000/ 600))
-
+#define PERIOD(x) (x / (tick_scale * 1000/ 600)) // enter period in us (= T0 / (tick_scale / 600khz))
 #define cbw_index() ((ctl->cbw == ctl->cbbufs[0]) ? 0: 1)
 #define in(x, y, size) ((uint32_t)x >= (uint32_t)y && (uint32_t)x < (uint32_t)y + size)
 
-struct bcm2708_dma_cb * get_free_servo_cb(struct bcm2708_dma_cb *cbstart)
+static struct bcm2708_dma_cb * get_free_servo_cb(struct bcm2708_dma_cb *cbstart)
 {
 	int s;
 
@@ -82,7 +31,35 @@ struct bcm2708_dma_cb * get_free_servo_cb(struct bcm2708_dma_cb *cbstart)
 	return NULL;
 }
 
-int add_servo_lo_cb(struct bcm2708_dma_cb *cbstart, int servo, int ticks)
+static int find_servo_lo_cb(struct bcm2708_dma_cb *cbstart, int servo, struct bcm2708_dma_cb **cb, struct bcm2708_dma_cb **cblast)
+{
+	struct bcm2708_dma_cb *_cb, *last;
+
+	// walk the link list looking for the servo entry to set output lo
+	_cb = cbstart + 2;
+	last = cbstart + 1;
+	for (;;) {
+		if ((_cb->dst == (((GPIO_BASE + GPCLR0*4) & 0x00ffffff) | 0x7e000000)) && (*(uint32_t *)(_cb->src) & (1 << servo2gpio[servo])))
+			// found a gpio set lo for this servo
+			break;
+
+		if (_cb->next == 0 || _cb->next == (unsigned long)cbstart)
+			// cannot find gpio set lo for this servo
+			return -1;
+
+		last = _cb;
+		_cb = (struct bcm2708_dma_cb *)_cb->next;
+	}
+
+	// found so return details
+	if (cb != NULL)
+		*cb = _cb;
+	if (cblast != NULL)
+		*cblast = last;
+	return 0;
+}
+
+static int add_servo_lo_cb(struct bcm2708_dma_cb *cbstart, int servo, int ticks)
 {
 	struct bcm2708_dma_cb *cbprev, *cbnew;
 	int elapsed = 0, tnext;
@@ -140,35 +117,7 @@ int add_servo_lo_cb(struct bcm2708_dma_cb *cbstart, int servo, int ticks)
 	}
 }
 
-int find_servo_lo_cb(struct bcm2708_dma_cb *cbstart, int servo, struct bcm2708_dma_cb **cb, struct bcm2708_dma_cb **cblast)
-{
-	struct bcm2708_dma_cb *_cb, *last;
-
-	// walk the link list looking for the servo entry to set output lo
-	_cb = cbstart + 2;
-	last = cbstart + 1;
-	for (;;) {
-		if ((_cb->dst == (((GPIO_BASE + GPCLR0*4) & 0x00ffffff) | 0x7e000000)) && (*(uint32_t *)(_cb->src) & (1 << servo2gpio[servo])))
-			// found a gpio set lo for this servo
-			break;
-
-		if (_cb->next == 0 || _cb->next == (unsigned long)cbstart)
-			// cannot find gpio set lo for this servo
-			return -1;
-
-		last = _cb;
-		_cb = (struct bcm2708_dma_cb *)_cb->next;
-	}
-
-	// found so return details
-	if (cb != NULL)
-		*cb = _cb;
-	if (cblast != NULL)
-		*cblast = last;
-	return 0;
-}
-
-int remove_servo_lo_cb(struct bcm2708_dma_cb *cbstart, int servo)
+static int remove_servo_lo_cb(struct bcm2708_dma_cb *cbstart, int servo)
 {
 	struct bcm2708_dma_cb *cb, *cblast;
 
@@ -190,7 +139,7 @@ int remove_servo_lo_cb(struct bcm2708_dma_cb *cbstart, int servo)
 	return 0;
 }
 
-int copy_a2w()
+int copy_a2w(void)
 {
 	int ia, iw, offset;
 	struct bcm2708_dma_cb *cb;
@@ -228,6 +177,35 @@ int copy_a2w()
 	}
 }
 
+int roll_a2w(void)
+{
+	struct bcm2708_dma_cb *cb, *_cb;
+	cb = ctl->cba;
+
+	// find the end of the current sequence
+	for (;;)
+	{
+		if ((struct bcm2708_dma_cb *)cb->next == ctl->cba)
+			break;
+		cb = (struct bcm2708_dma_cb *)cb->next;
+	}
+
+	//@todo wait until it is safe to change the end of the sequence
+	
+	// roll the end of the active sequence into the working sequence
+	cb->next = (int)ctl->cbw;
+	
+	//@todo wait until the new sequence is active
+
+	#if 0
+	// swap the active sequence with the working sequence
+	_cb = ctl->cbw;
+	ctl->cbw = ctl->cba;
+	ctl->cba = _cb;
+	#endif
+
+}
+
 int set_servo_duty(int servo, float duty)
 {
 	int ticks = ctl->period * duty;
@@ -262,125 +240,19 @@ int set_servo_duty(int servo, float duty)
 		add_servo_lo_cb(ctl->cbw, servo, ticks);
 	}
 
-	//@todo wait until it is safe to swap the buffers
-	
-	// swap the buffers by rolling the old list into the new one
-	#if 0
-	cb = ctl->cba;
-	for (;;)
-	{
-		if ((struct bcm2708_dma_cb *)cb->next == ctl->cba)
-			break;
-		cb = (struct bcm2708_dma_cb *)cb->next;
-	}
-	cb->next = (int)ctl->cbw;
-	//
-	_cb = ctl->cbw;
-	ctl->cbw = ctl->cba;
-	ctl->cba = _cb;
-	#endif
+	//roll_a2w();
 
-	//@todo wait until the new sequence is active
+	//@todo wait until it is safe to swap the buffers
 	
 	return 0;
 }
 
-void print_sim()
-{
-	uint8_t gpiostates[NUM_SERVOS][1024*10];
-	uint8_t gpiostate[NUM_SERVOS];
-	int T = 0, t;
-	struct bcm2708_dma_cb *cb = ctl->cba;
-	int cbacount=0, cbwcount = 0;
-	int s;
-
-	// workout T (max ticks before the loop repeats itself)
-	cb = ctl->cba;
-	for (;;) {
-		if (cb->dst ==  (((PWM_BASE + PWM_FIFO*4) & 0x00ffffff) | 0x7e000000))
-			T += cb->length;
-		if (cb == ctl->cba) {
-			cbwcount = 0;
-			cbacount++;
-			if (cbacount > 1)
-				break;
-		} else if (cb == ctl->cbw) {
-			cbacount = 0;
-			cbwcount++;
-			if (cbwcount > 1)
-				break;
-		}
-		cb = (struct bcm2708_dma_cb *)cb->next;
-	}
-	printf("max ticks = %d\n", T);
-	printf("cba = %p; cbw = %p\n", ctl->cba, ctl->cbw);
-
-	// populate the gpiostates buffer
-	memset(gpiostate, 0, NUM_SERVOS);
-	cb = ctl->cba;
-	t = 0;
-	while (t < T) {
-		
-		printf("===================\n");
-		printf("next, cb=%p, cbnext=%p\n", cb, (struct bcm2708_dma_cb *)cb->next);
-
-		// clear current gpio states
-		if (cb->dst == (((GPIO_BASE + GPCLR0*4) & 0x00ffffff) | 0x7e000000)) {
-			uint32_t mask = *(uint32_t *)cb->src;
-			printf("cmask=%d, src=%p, gpiolo=%p, gpioinit=%p\n", (int)mask, (void *)cb->src, ctl->gpiolo, ctl->gpioinit);
-			for (s=0; s < NUM_SERVOS; s++)
-				if (mask & (1 << servo2gpio[s])) {
-					printf("clearing states for servo %d\n", s);
-					gpiostate[s] = 0;
-				}
-		}
-
-		// set current gpio states
-		if (cb->dst == (((GPIO_BASE + GPSET0*4) & 0x00ffffff) | 0x7e000000)) {
-			uint32_t mask = *(uint32_t *)cb->src;
-			printf("smask=%d\n", (int)mask);
-			for (s=0; s < NUM_SERVOS; s++)
-				if (mask & (1 << servo2gpio[s])) {
-					printf("setting states for servo %d\n", s);
-					gpiostate[s] = 1;
-				}
-		}
-
-		// delay
-		if (cb->dst == (((PWM_BASE + PWM_FIFO*4) & 0x00ffffff) | 0x7e000000)) {
-			int k;
-			// flood fill gpiostate for this many ticks
-			printf("doing delay of %d ticks\n", (int)cb->length);
-			for (k = t; t < k + cb->length; t++) {
-				for (s=0; s < NUM_SERVOS; s++)
-					gpiostates[s][t] = gpiostate[s];
-			}
-		}
-		
-		// next
-		cb = (struct bcm2708_dma_cb *)cb->next;
-	}
-	
-	// print the gpiostates buffer
-	for (s = 0; s < NUM_SERVOS; s++) {
-		for (t = 0; t < T; t++) {
-			if (gpiostates[s][t]) { 
-				printf("^");
-			} else {
-				printf("_");
-			}
-		}
-		printf("|\n");
-	}
-}
-
-int main(int argc, void *argv)
+void init_servos(void)
 {
 	int k;
 	uint32_t pinmask;
-	struct bcm2708_dma_cb *cb;
 
-	// init
+	// zero ctl structs and setup the active and working double buffer pointers
 	memset(ctl, 0x00, sizeof(struct ctldata_s));
 	ctl->cba = ctl->cbbufs[0];
 	ctl->cbw = ctl->cbbufs[1];
@@ -388,8 +260,8 @@ int main(int argc, void *argv)
 	pinmask = 0;
 	for (k = 0; k < NUM_SERVOS; k++)
 		pinmask |= (1 << servo2gpio[k]);
-
-	// initially set all servos lo (this is for 0 duty cycle)
+	
+	// initially set all servos to 0% duty
 	ctl->gpioinit[0][0]  = pinmask;
 	ctl->cba[0].src    = (uint32_t)(&ctl->gpioinit[0][0]) & 0x7fffffff;
 	ctl->cba[0].info   = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP;
@@ -397,7 +269,7 @@ int main(int argc, void *argv)
 	ctl->cba[0].length = sizeof(uint32_t);
 	ctl->cba[0].stride = 0;
 	ctl->cba[0].next   = (uint32_t)&ctl->cba[1] & 0x7fffffff;
-	// initially set no servos 100% hi
+	// hence also no servos set hi initially
 	ctl->gpioinit[0][1]  = 0;
 	ctl->cba[1].src    = (uint32_t)(&ctl->gpioinit[0][1]) & 0x7fffffff;
 	ctl->cba[1].info   = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP;
@@ -412,29 +284,5 @@ int main(int argc, void *argv)
 	ctl->cba[2].length = ctl->period;	
 	ctl->cba[2].stride = 0;
 	ctl->cba[2].next = (uint32_t)&ctl->cba[0] & 0x7fffffff;
-
-	// add in each servos initial state
-	copy_a2w();
-
-	set_servo_duty(0, 0.0);
-	set_servo_duty(1, 0.2);
-	set_servo_duty(2, 0.3);
-	set_servo_duty(3, 0.4);
-	set_servo_duty(4, 0.4);
-	set_servo_duty(5, 0.5);
-	set_servo_duty(6, 0.6);
-	set_servo_duty(7, 1.0);
-
-	cb = ctl->cba;
-	for (;;)
-	{
-		if ((struct bcm2708_dma_cb *)cb->next == ctl->cba)
-			break;
-		cb = (struct bcm2708_dma_cb *)cb->next;
-	}
-	cb->next = (int)ctl->cbw;
-
-	print_sim();
-	
-	return 0;
 }
+

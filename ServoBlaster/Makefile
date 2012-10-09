@@ -10,8 +10,8 @@ servoblaster.ko:	servoblaster.c servoblaster.h
 servodemo:	servodemo.c servoblaster.h
 	gcc -Wall -g -O2 -o servodemo servodemo.c -Wl,--export-dynamic `pkg-config --cflags gtk+-3.0 gmodule-export-2.0` `pkg-config --libs gtk+-3.0 gmodule-export-2.0`
 
-cbman_test: cbman.c cbman_test.c
-	gcc -g -o $@ $? -DTEST
+cbman_test: cbman.c cbman_test.c cbman_test.h
+	gcc -g -o $@ cbman.c cbman_test.c -DTEST
 
 clean:
 	make -C ${KERNEL_TREE} ARCH=arm CROSS_COMPILE=/usr/bin/arm-linux-gnueabi- M=$(PWD) clean

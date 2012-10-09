@@ -200,12 +200,10 @@ int roll_a2w(void)
 	cb->next = (int)ctl->cbw;
 	//@todo wait until the new sequence is active
 
-	#if 0
 	// swap the active sequence with the working sequence
 	_cb = ctl->cbw;
 	ctl->cbw = ctl->cba;
 	ctl->cba = _cb;
-	#endif
 
 }
 
@@ -221,7 +219,7 @@ int set_servo_duty(int servo, float duty)
 		return -1;
 
 	// copy the current active buffer info into the working buffers
-	//copy_a2w();
+	copy_a2w();
 
 	// update double buffer to the desired sequence 
 	if (ticks == 0) {	
@@ -243,7 +241,7 @@ int set_servo_duty(int servo, float duty)
 		add_servo_lo_cb(ctl->cbw, servo, ticks);
 	}
 
-	//roll_a2w();
+	roll_a2w();
 
 	//@todo wait until it is safe to swap the buffers
 	

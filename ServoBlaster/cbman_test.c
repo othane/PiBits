@@ -40,6 +40,8 @@ void print_sim()
 	int cbacount=0, cbwcount = 0;
 	int s;
 
+	printf("============= NEW SIM PRINTOUT =============\n");
+
 	// workout T (max ticks before the loop repeats itself)
 	cb = ctl->cba;
 	for (;;) {
@@ -118,6 +120,34 @@ void print_sim()
 		}
 		printf("|\n");
 	}
+	
+	printf("============= SIM PRINTOUT DONE =============\n\n\n");
+}
+
+void up(void)
+{
+	set_servo_duty(0, 0.0);
+	set_servo_duty(1, 0.2);
+	set_servo_duty(2, 0.3);
+	set_servo_duty(3, 0.4);
+	set_servo_duty(4, 0.4);
+	set_servo_duty(5, 0.5);
+	set_servo_duty(6, 0.6);
+	set_servo_duty(7, 1.0);
+	print_sim();
+}
+
+void down(void)
+{
+	set_servo_duty(0, 1.0);
+	set_servo_duty(1, 0.9);
+	set_servo_duty(2, 0.8);
+	set_servo_duty(3, 0.7);
+	set_servo_duty(4, 0.6);
+	set_servo_duty(5, 0.5);
+	set_servo_duty(6, 0.4);
+	set_servo_duty(7, 0.0);
+	print_sim();
 }
 
 int main(int argc, void *argv)
@@ -127,20 +157,10 @@ int main(int argc, void *argv)
 
 	// init the servo list to all lo
 	init_servos();
-
-	copy_a2w();
-
-	set_servo_duty(0, 0.0);
-	set_servo_duty(1, 0.2);
-	set_servo_duty(2, 0.3);
-	set_servo_duty(3, 0.4);
-	set_servo_duty(4, 0.4);
-	set_servo_duty(5, 0.5);
-	set_servo_duty(6, 0.6);
-	set_servo_duty(7, 1.0);
-
-	roll_a2w();
-
 	print_sim();
+
+	up();
+	down();
+
 	return 0;
 }

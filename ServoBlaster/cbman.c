@@ -123,7 +123,7 @@ static int add_servo_lo_cb(struct bcm2708_dma_cb *cbstart, int servo, int ticks)
 
 static int remove_servo_lo_cb(struct bcm2708_dma_cb *cbstart, int servo)
 {
-	struct bcm2708_dma_cb *cb, *cblast;
+	struct bcm2708_dma_cb *cb, *cblast, *cbnext;
 
 	// find servo lo cb
 	if (find_servo_lo_cb(cbstart, servo, &cb, &cblast) < 0)
@@ -135,8 +135,10 @@ static int remove_servo_lo_cb(struct bcm2708_dma_cb *cbstart, int servo)
 		*(uint32_t *)(cb->src) &= ~SERVOBIT(servo);
 	}
 	else {
+		cbnext = (struct bcm2708_dma_cb *)(cb->next);
 		// this cb is used only for this servo so just free it
-		cblast->next = ((struct bcm2708_dma_cb *)cb->next)->next;
+		cblast->length += cb->length;
+		cblast->next = cbnext->next;
 		memset((void *)cb, 0x00, 2*sizeof(struct bcm2708_dma_cb));
 	}
 

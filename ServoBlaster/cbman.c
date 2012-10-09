@@ -137,7 +137,7 @@ static int remove_servo_lo_cb(struct bcm2708_dma_cb *cbstart, int servo)
 	else {
 		cbnext = (struct bcm2708_dma_cb *)(cb->next);
 		// this cb is used only for this servo so just free it
-		cblast->length += cb->length;
+		cblast->length += cbnext->length;
 		cblast->next = cbnext->next;
 		memset((void *)cb, 0x00, 2*sizeof(struct bcm2708_dma_cb));
 	}
